@@ -4,15 +4,29 @@ Turns free Cricsheet ball-by-ball data (JSON or CSV) into a one-page scouting br
 IPL team. Everything runs on your machine: no API keys, no cloud, no login.
 
 ```
-Cricsheet CSVs ──► cricket_brief tool ──► local model (Ollama) ──► number check ──► brief.md
-                   (Python computes        (writes prose only)      (flags any figure
-                    every number)                                    not in the stats)
+Cricsheet data ─► cricket_brief ─► cricket_facts ─► local model ─► claim checker ─► brief.md
+                  (every number)   (F1..Fn, each     (rewrites      (per bullet: numbers
+                                    STRENGTH /        facts, must    belong to cited fact,
+                                    WEAKNESS /        cite [F#])     wording matches verdict,
+                                    NEUTRAL)                         phase/league match)
+                                                         ▲               │ fail: retry with
+                                                         └───────────────┘ errors (max 3)
+                                                     still failing ─► plain fact-sheet brief
 ```
 
-The design choice that matters: the model never does arithmetic. Phase run
-rates, economies, strike rates and league baselines are computed in Python and
-unit-tested by hand. The model only writes them up, and the number check
-catches it if it makes a figure up (exit code 2).
+The model never does arithmetic and never decides direction. Python computes
+every figure and labels every comparison (above/below league, higher/lower
+than the player's own average). The model only rephrases facts and must cite
+their IDs. The checker rejects any bullet that quotes a number from a
+different fact, calls a STRENGTH weak (or the reverse), or names a phase or
+"league" that the cited fact is not about. After three failed attempts you get
+the plain fact sheet: a plain brief, never a wrong one.
+
+Why: a first version only checked that each number appeared *somewhere* in the
+stats. On real MI 2023-26 data, qwen3.5:9b passed that check while pinning
+league figures on MI, team totals on one batter, and calling a 185 strike rate
+a struggle. Those six errors are now regression tests in
+`tests/tools/test_cricket_facts.py`.
 
 ## Setup on a Mac (Apple Silicon, 16 GB)
 
@@ -44,6 +58,7 @@ file. Super overs are excluded. Use `--data-dir` or the
 ```bash
 # 1. Check the numbers first (no model, instant)
 uv run python examples/ipl_brief/ipl_brief.py --team MI --from-season 2023 --stats-only
+uv run python examples/ipl_brief/ipl_brief.py --team MI --from-season 2023 --facts-only
 
 # 2. Full brief
 uv run python examples/ipl_brief/ipl_brief.py --team MI --from-season 2023 --out ~/mi_brief.md
@@ -51,10 +66,7 @@ uv run python examples/ipl_brief/ipl_brief.py --team MI --from-season 2023 --out
 # Head-to-head only
 uv run python examples/ipl_brief/ipl_brief.py --team RCB --opponent CSK --from-season 2022
 
-# Agentic mode: the model decides to call the tool itself
-uv run python examples/ipl_brief/ipl_brief.py --team KKR --agent
-
-# Or from the jarvis CLI
+# Or let an agent call the tool itself (no claim checker on this path)
 uv run jarvis ask --agent orchestrator --tools cricket_brief \
   "Write an opposition brief on Sunrisers Hyderabad since 2024"
 ```
@@ -65,12 +77,14 @@ Bangalore) are merged into the current ones.
 
 ## Testing it properly
 
-1. `uv run pytest tests/tools/test_cricket_brief.py tests/tools/test_ipl_brief_example.py`
-   checks the maths on a hand-checked fixture and the full pipeline with a stub model.
+1. `uv run pytest tests/tools/test_cricket_brief.py tests/tools/test_cricket_facts.py tests/tools/test_ipl_brief_example.py`
+   checks the maths on a hand-checked fixture, the claim checker against real
+   past errors, and the retry/fallback pipeline with a stub model.
 2. Spot-check a real number: run `--stats-only` for one team and season, then
    compare a top batter's runs and strike rate with ESPNcricinfo for that season.
-3. Run the full brief 3 times. It should pass the number check every time. If
-   it fails, the footer lists the invented figures.
+3. Run the full brief 3 times and read it against the fact sheet in its
+   footer. Exit code 0 = model brief passed; 3 = fell back to the fact sheet
+   (the rejected draft and reasons are at the bottom).
 
 ## Limits (be honest about these in demos)
 
@@ -79,5 +93,9 @@ Bangalore) are merged into the current ones.
 - "Weakness" flags mean more than 8% worse than the league in the same seasons.
   They describe the past, not a prediction. Figures under 60 balls are marked
   as low sample.
+- The checker is rule-based. It catches wrong numbers, wrong direction words
+  and wrong phase/league labels, but not every subtle misreading (e.g. a
+  correct number with a misleading adjective it doesn't list). Read the brief
+  against its cited facts before sharing.
 - A 9B local model writes plainer prose than a frontier cloud model. The
   numbers are just as reliable, because the model doesn't produce them.

@@ -616,9 +616,10 @@ class CricketBriefTool(BaseTool):
             description=(
                 "Compute verified ball-by-ball stats for one IPL/T20 team from "
                 "local Cricsheet data: batting and bowling by phase vs league "
-                "average, top batters and bowlers, dismissal mix and flagged "
-                "weaknesses. Use it before writing any opposition brief, and "
-                "quote its numbers exactly."
+                "average, top batters and bowlers, dismissal mix, and a FACTS "
+                "list with IDs and verdicts. Use it before writing any "
+                "opposition brief; cite fact IDs like [F3] and quote only "
+                "numbers from the cited fact."
             ),
             parameters={
                 "type": "object",
@@ -681,9 +682,13 @@ class CricketBriefTool(BaseTool):
             )
         except (TypeError, ValueError) as exc:
             return ToolResult(tool_name=TOOL_NAME, content=str(exc), success=False)
+        from openjarvis.tools.cricket_facts import build_facts, render_fact_sheet
+
+        content = render(report, opponent)
+        content += "\n\n" + render_fact_sheet(build_facts(report))
         return ToolResult(
             tool_name=TOOL_NAME,
-            content=render(report, opponent),
+            content=content,
             success=True,
             metadata={"team": team, "matches": report.matches},
         )
