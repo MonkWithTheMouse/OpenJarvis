@@ -24,6 +24,8 @@ EXPECTED_TOOLS = {
     "file_write",
     # web_search.py
     "web_search",
+    # cricket_brief.py
+    "cricket_brief",
     # weather.py
     "get_weather",
     # fx_macro.py

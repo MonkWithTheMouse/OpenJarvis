@@ -262,6 +262,7 @@ LOCAL_ACCESS_TOOLS = {
     "check_permission",
     "code_interpreter",
     "code_interpreter_docker",
+    "cricket_brief",
     "db_query",
     "docker_shell_exec",
     "file_read",

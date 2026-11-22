@@ -54,6 +54,7 @@ EXPECTED_LOCAL_ACCESS_TOOLS = {
     "calendar_search",
     "calendar_upcoming",
     "check_permission",
+    "cricket_brief",
     "docker_shell_exec",
     "db_query",
     "get_pending_actions",

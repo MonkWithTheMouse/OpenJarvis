@@ -249,6 +249,7 @@ DEFAULT_TOOL_CAPABILITIES: Dict[str, List[str]] = {
     "calendar_search": [Capability.FILE_READ],
     "calendar_upcoming": [Capability.FILE_READ],
     "cancel_scheduled_task": [Capability.SCHEDULE_CREATE],
+    "cricket_brief": [Capability.FILE_READ],
     "channel_list": [Capability.SYSTEM_ADMIN],
     "channel_send": [Capability.CHANNEL_SEND],
     "channel_status": [Capability.SYSTEM_ADMIN],
