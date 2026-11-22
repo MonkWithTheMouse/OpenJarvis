@@ -83,14 +83,19 @@ Bangalore) are merged into the current ones.
 2. Spot-check a real number: run `--stats-only` for one team and season, then
    compare a top batter's runs and strike rate with ESPNcricinfo for that season.
 3. Run the full brief 3 times and read it against the fact sheet in its
-   footer. Exit code 0 = model brief passed; 3 = fell back to the fact sheet
-   (the rejected draft and reasons are at the bottom).
+   footer. Exit code 0 = model brief passed; 3 = fell back to the fact sheet.
+   Every failed attempt's reasons are printed live and kept under "Rejected
+   drafts (why)" in the file, so you can tell prompt problems from checker
+   problems.
 
 ## Limits (be honest about these in demos)
 
 - No pace-vs-spin or venue splits: Cricsheet's ball-by-ball CSV has no bowler
   type. Adding a small bowler-type lookup file would be the next step.
-- "Weakness" flags mean more than 8% worse than the league in the same seasons.
+- STRENGTH / WEAKNESS means more than 5% better / worse than the comparison
+  (league in the same seasons, or the player's own overall figure); within 5%
+  is NEUTRAL. One constant, `VERDICT_MARGIN` in `cricket_brief.py`, drives both
+  the stats-table flags and the fact verdicts.
   They describe the past, not a prediction. Figures under 60 balls are marked
   as low sample.
 - The checker is rule-based. It catches wrong numbers, wrong direction words

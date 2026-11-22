@@ -23,12 +23,13 @@ from typing import Dict, List, Optional
 from openjarvis.tools.cricket_brief import (
     LOW_SAMPLE_BALLS,
     PHASES,
+    VERDICT_MARGIN,
     Tally,
     TeamReport,
 )
 
 STRENGTH, WEAKNESS, NEUTRAL = "STRENGTH", "WEAKNESS", "NEUTRAL"
-LEVEL_BAND = 0.02  # within 2% of the comparison counts as level
+LEVEL_BAND = VERDICT_MARGIN  # within 5% of the comparison counts as level
 MIN_PLAYER_BALLS = 30  # phase splits below this are too noisy to state
 
 _NUM = re.compile(r"(?<![\w.])\d+(?:\.\d+)?")
@@ -252,10 +253,29 @@ def _harmless(raw: str) -> bool:
     return value.is_integer() and (value <= 20 or 2000 <= value <= 2100)
 
 
-def verify_brief(brief: str, facts: List[Fact]) -> List[str]:
+REQUIRED_SECTIONS = ("### Where to attack them", "### What to watch out for")
+BOTTOM_LINE = "**Bottom line:**"
+
+
+def _structure_problems(brief: str) -> List[str]:
+    problems: List[str] = []
+    bottom = [ln for ln in brief.splitlines() if BOTTOM_LINE in ln]
+    if not bottom:
+        problems.append(f"Missing the '{BOTTOM_LINE}' line.")
+    elif not _CITE.search(bottom[0]):
+        problems.append("The bottom line must end with a fact ID like [F3].")
+    for heading in REQUIRED_SECTIONS:
+        if heading.lower() not in brief.lower():
+            problems.append(f"Missing section heading '{heading}'.")
+    return problems
+
+
+def verify_brief(
+    brief: str, facts: List[Fact], *, require_structure: bool = False
+) -> List[str]:
     """Return a list of problems; empty means every bullet is backed."""
     by_id: Dict[str, Fact] = {f.id: f for f in facts}
-    problems: List[str] = []
+    problems: List[str] = _structure_problems(brief) if require_structure else []
     for raw_line in brief.splitlines():
         line = raw_line.strip()
         if not line or line.startswith("#"):
@@ -311,9 +331,18 @@ def fallback_brief(team: str, facts: List[Fact]) -> str:
     strong = [f for f in reversed(ranked) if f.verdict == STRENGTH][:3]
     players = [f for f in facts if "(batter)" in f.text or "(bowler)" in f.text]
     out = [f"## {team}: opposition brief (fact sheet)", ""]
-    out.append("### Where they are weaker than the league")
+    if weak:
+        out.append(f"{BOTTOM_LINE} Biggest opening: {weak[0].text} [{weak[0].id}]")
+    elif strong:
+        out.append(
+            f"{BOTTOM_LINE} No clear opening; their biggest edge: "
+            f"{strong[0].text} [{strong[0].id}]"
+        )
+    else:
+        out.append(f"{BOTTOM_LINE} No clear gaps beyond the margin [F1]")
+    out += ["", REQUIRED_SECTIONS[0]]
     out += [f"- {f.text} [{f.id}]" for f in weak] or ["- No clear gaps."]
-    out += ["", "### Where they are stronger than the league"]
+    out += ["", REQUIRED_SECTIONS[1]]
     out += [f"- {f.text} [{f.id}]" for f in strong] or ["- No clear gaps."]
     out += ["", "### Key players"]
     out += [f"- {f.text} [{f.id}]" for f in players[:4]]

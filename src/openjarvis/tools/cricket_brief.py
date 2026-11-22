@@ -35,7 +35,8 @@ DEFAULT_DATA_DIR = Path.home() / ".openjarvis" / "data" / "cricket"
 
 PHASES = ("powerplay", "middle", "death")
 LOW_SAMPLE_BALLS = 60  # ten overs; below this a rate is flagged as noisy
-FLAG_MARGIN = 0.08  # 8% worse than league average counts as a weakness
+VERDICT_MARGIN = 0.05  # >5% better/worse than the comparison = strength/weakness
+FLAG_MARGIN = VERDICT_MARGIN  # one threshold for tables and fact verdicts
 
 # Dismissals not credited to the bowler.
 _NON_BOWLER_WICKETS = {
@@ -581,8 +582,14 @@ def render(report: TeamReport, opponent: Optional[str] = None) -> str:
     lines += ["", "## How their batters get out"]
     for kind, n in report.dismissal_mix.most_common():
         lines.append(f"- {kind}: {n} ({n * 100 / total_wkts:.0f}%)")
-    lines += ["", "## Auto-flagged weaknesses (computed, not model-generated)"]
-    lines += [f"- {f}" for f in report.flags] or ["- None beyond 8% of league."]
+    lines += [
+        "",
+        f"## Auto-flagged weaknesses (>{FLAG_MARGIN:.0%} worse than league; "
+        "computed, not model-generated)",
+    ]
+    lines += [f"- {f}" for f in report.flags] or [
+        f"- None beyond {FLAG_MARGIN:.0%} of league."
+    ]
     lines += [
         "",
         "Notes: phases are overs 1-6 / 7-15 / 16-20. League baseline = all "

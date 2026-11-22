@@ -61,8 +61,17 @@ def _run(tmp_path, monkeypatch, replies, *extra):
 def test_bad_then_good_passes_on_retry(tmp_path, monkeypatch):
     _write(tmp_path / "all_matches.csv", _fixture_rows())
     fid = _pp_fact(tmp_path).id
-    bad = f"<think>x</think>## Brief\n- MI struggle in the powerplay at 15.00 [{fid}]"
-    good = f"## Brief\n- MI score quickly in the powerplay at 15.00 [{fid}]"
+    frame = (
+        "## Some model title\n**Bottom line:** They start fast [{fid}]\n"
+        "### Where to attack them\n{line}\n### What to watch out for\n"
+        "- Their openers [{fid}]"
+    )
+    bad = "<think>x</think>" + frame.format(
+        fid=fid, line=f"- MI struggle in the powerplay at 15.00 [{fid}]"
+    )
+    good = frame.format(
+        fid=fid, line=f"- MI score quickly in the powerplay at 15.00 [{fid}]"
+    )
     code, seen, text = _run(tmp_path, monkeypatch, [bad, good])
 
     assert code == 0
@@ -70,6 +79,20 @@ def test_bad_then_good_passes_on_retry(tmp_path, monkeypatch):
     assert "Negative wording on a STRENGTH fact" in seen["prompts"][1]
     assert "Fact check: passed** (attempt 2)" in text
     assert "<think>" not in text and seen["closed"]
+    # Python owns the title; the failed attempt's reasons are kept.
+    assert text.startswith("## Mumbai Indians: opposition brief")
+    assert "Some model title" not in text
+    assert "Rejected drafts (why)" in text and "Attempt 1:" in text
+
+
+def test_missing_structure_is_retried(tmp_path, monkeypatch, capsys):
+    _write(tmp_path / "all_matches.csv", _fixture_rows())
+    fid = _pp_fact(tmp_path).id
+    thin = f"- MI score quickly in the powerplay at 15.00 [{fid}]"
+    code, seen, text = _run(tmp_path, monkeypatch, [thin])
+    assert code == 3
+    assert "Missing the '**Bottom line:**' line" in seen["prompts"][1]
+    assert "Missing section heading" in capsys.readouterr().err
 
 
 def test_always_bad_falls_back_to_fact_sheet(tmp_path, monkeypatch):
@@ -82,7 +105,7 @@ def test_always_bad_falls_back_to_fact_sheet(tmp_path, monkeypatch):
     assert len(seen["prompts"]) == ipl_brief.MAX_ATTEMPTS
     assert "opposition brief (fact sheet)" in text
     assert "model brief rejected after 3 attempts" in text
-    assert "Rejected model draft" in text
+    assert "Last rejected model draft" in text
 
 
 def test_facts_only_needs_no_model(tmp_path, monkeypatch, capsys):

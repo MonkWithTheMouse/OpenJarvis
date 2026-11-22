@@ -50,8 +50,7 @@ Hard rules:
    If a fact is marked low sample, say it is a weak signal.
 5. No outside knowledge (form, injuries, auctions, venues).
 
-Format (markdown, under 300 words):
-## {team}: opposition brief
+Format (markdown, under 300 words; these headings are checked):
 **Bottom line:** one sentence, ending with its fact ID.
 ### Where to attack them
 2-3 bullets from WEAKNESS facts.
@@ -76,6 +75,12 @@ respect each verdict.
 
 def strip_thinking(text: str) -> str:
     return re.sub(r"<think>.*?</think>", "", text, flags=re.S).strip()
+
+
+def with_title(brief: str, team: str) -> str:
+    """Python owns the title: drop any model-written H1/H2, add ours."""
+    body = [ln for ln in brief.splitlines() if not re.match(r"^#{1,2}\s", ln)]
+    return f"## {team}: opposition brief\n\n" + "\n".join(body).strip()
 
 
 def main() -> int:
@@ -146,6 +151,7 @@ def main() -> int:
         return 1
 
     brief, problems, attempts = "", [], 0
+    history: list[tuple[int, list[str]]] = []
     prompt = BRIEF_PROMPT.format(team=team, facts=sheet)
     try:
         for attempts in range(1, MAX_ATTEMPTS + 1):
@@ -154,11 +160,15 @@ def main() -> int:
                 f"(attempt {attempts}/{MAX_ATTEMPTS})...",
                 file=sys.stderr,
             )
-            brief = strip_thinking(j.ask(prompt, context=False, temperature=0.2))
-            problems = verify_brief(brief, facts)
+            draft = strip_thinking(j.ask(prompt, context=False, temperature=0.2))
+            brief = with_title(draft, team)
+            problems = verify_brief(brief, facts, require_structure=True)
             if not problems:
                 break
+            history.append((attempts, problems))
             print(f"  fact check failed: {len(problems)} problem(s)", file=sys.stderr)
+            for p in problems:
+                print(f"    - {p}", file=sys.stderr)
             prompt = RETRY_PROMPT.format(
                 problems="\n".join(f"- {p}" for p in problems), facts=sheet
             )
@@ -188,12 +198,16 @@ def main() -> int:
             "numbers and direction match the fact it cites."
         )
     footer += ["", "<details><summary>Fact sheet</summary>", "", sheet, "</details>"]
+    if history:
+        footer += ["", "<details><summary>Rejected drafts (why)</summary>", ""]
+        for n, probs in history:
+            footer.append(f"Attempt {n}:")
+            footer += [f"- {p}" for p in probs]
+        footer.append("</details>")
     output = brief + "\n" + "\n".join(footer) + "\n"
     if fell_back:
         output += (
-            "\n<details><summary>Rejected model draft and problems</summary>\n\n"
-            + "\n".join(f"- {p}" for p in problems)
-            + "\n\n"
+            "\n<details><summary>Last rejected model draft</summary>\n\n"
             + rejected
             + "\n</details>\n"
         )

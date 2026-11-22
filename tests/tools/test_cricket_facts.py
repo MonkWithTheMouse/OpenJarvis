@@ -142,4 +142,37 @@ def test_fallback_brief_always_passes_its_own_check(report):
 
 
 def test_fallback_on_gate1_facts_passes():
-    assert verify_brief(fallback_brief(MI, GATE1_FACTS), GATE1_FACTS) == []
+    text = fallback_brief(MI, GATE1_FACTS)
+    assert verify_brief(text, GATE1_FACTS, require_structure=True) == []
+
+
+def test_structure_required_when_asked():
+    facts = GATE1_FACTS
+    bullets = "- Rickelton accelerates at the death, 185 vs his usual 168 [F4]"
+    assert verify_brief(bullets, facts) == []
+    problems = verify_brief(bullets, facts, require_structure=True)
+    assert any("Bottom line" in p for p in problems)
+    assert any("Where to attack them" in p for p in problems)
+    assert any("What to watch out for" in p for p in problems)
+    uncited = (
+        "**Bottom line:** Attack early\n### Where to attack them\n"
+        "### What to watch out for"
+    )
+    assert any(
+        "must end with a fact ID" in p
+        for p in verify_brief(uncited, facts, require_structure=True)
+    )
+
+
+def test_fallback_has_full_structure(report):
+    facts = build_facts(report)
+    text = fallback_brief(MI, facts)
+    assert verify_brief(text, facts, require_structure=True) == []
+
+
+def test_five_percent_band_is_neutral():
+    from openjarvis.tools.cricket_facts import _verdict
+
+    # Boult-like: 9.66 vs league 9.30 is ~3.9% worse -> NEUTRAL, not WEAKNESS.
+    assert _verdict((9.30 - 9.66) / 9.30) == NEUTRAL
+    assert _verdict(-0.06) == WEAKNESS and _verdict(0.06) == STRENGTH
