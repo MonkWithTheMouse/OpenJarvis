@@ -20,17 +20,6 @@ def test_thinking_is_stripped():
     assert ipl_brief.strip_thinking("<think>hmm 999</think>\n## Brief") == "## Brief"
 
 
-def _pp_fact(tmp_path):
-    cb._CACHE.clear()
-    rows = cb.load_deliveries(tmp_path)
-    report = cb.analyse(rows, "Mumbai Indians", from_season=2023)
-    return next(
-        f
-        for f in build_facts(report)
-        if f.text.startswith("Mumbai Indians powerplay batting run rate")
-    )
-
-
 def _run(tmp_path, monkeypatch, replies, *extra):
     cb._CACHE.clear()
     seen = {"prompts": []}
@@ -58,51 +47,49 @@ def _run(tmp_path, monkeypatch, replies, *extra):
     return code, seen, out.read_text() if out.exists() else ""
 
 
-def test_bad_then_good_passes_on_retry(tmp_path, monkeypatch):
-    _write(tmp_path / "all_matches.csv", _fixture_rows())
-    fid = _pp_fact(tmp_path).id
-    frame = (
-        "## Some model title\n**Bottom line:** They start fast [{fid}]\n"
-        "### Where to attack them\n{line}\n### What to watch out for\n"
-        "- Their openers [{fid}]"
-    )
-    bad = "<think>x</think>" + frame.format(
-        fid=fid, line=f"- MI struggle in the powerplay at 15.00 [{fid}]"
-    )
-    good = frame.format(
-        fid=fid, line=f"- MI score quickly in the powerplay at 15.00 [{fid}]"
-    )
-    code, seen, text = _run(tmp_path, monkeypatch, [bad, good])
+def _season(tmp_path):
+    from tests.tools.test_cricket_facts import _season_rows
+
+    _write(tmp_path / "all_matches.csv", _season_rows())
+    cb._CACHE.clear()
+    report = cb.analyse(cb.load_deliveries(tmp_path), "Mumbai Indians")
+    return build_facts(report)
+
+
+def _run_season(tmp_path, monkeypatch, replies):
+    import json as _json
+
+    replies = [r if isinstance(r, str) else _json.dumps(r) for r in replies]
+    return _run(tmp_path, monkeypatch, replies, "--from-season", "2024")
+
+
+def test_bad_plan_then_good_plan(tmp_path, monkeypatch, capsys):
+    from tests.tools.test_cricket_facts import _good_plan
+
+    facts = _season(tmp_path)
+    good = _good_plan(facts)
+    bad = {**good, "attack": [{"fact": good["attack"][0]["fact"],
+                               "note": "Harshal Patel is weak here"}]}  # fmt: skip
+    code, seen, text = _run_season(tmp_path, monkeypatch, [bad, good])
 
     assert code == 0
     assert len(seen["prompts"]) == 2
-    assert "Negative wording on a STRENGTH fact" in seen["prompts"][1]
-    assert "Fact check: passed** (attempt 2)" in text
-    assert "<think>" not in text and seen["closed"]
-    # Python owns the title; the failed attempt's reasons are kept.
+    assert "names not on the fact sheet" in seen["prompts"][1]
     assert text.startswith("## Mumbai Indians: opposition brief")
-    assert "Some model title" not in text
+    assert "Fact check: passed** (attempt 2)" in text
     assert "Rejected drafts (why)" in text and "Attempt 1:" in text
+    assert "names not on the fact sheet" in capsys.readouterr().err
+    assert seen["closed"]
 
 
-def test_missing_structure_is_retried(tmp_path, monkeypatch, capsys):
-    _write(tmp_path / "all_matches.csv", _fixture_rows())
-    fid = _pp_fact(tmp_path).id
-    thin = f"- MI score quickly in the powerplay at 15.00 [{fid}]"
-    code, seen, text = _run(tmp_path, monkeypatch, [thin])
-    assert code == 3
-    assert "Missing the '**Bottom line:**' line" in seen["prompts"][1]
-    assert "Missing section heading" in capsys.readouterr().err
-
-
-def test_always_bad_falls_back_to_fact_sheet(tmp_path, monkeypatch):
-    _write(tmp_path / "all_matches.csv", _fixture_rows())
-    fid = _pp_fact(tmp_path).id
-    bad = f"## Brief\n- MI are weak in the powerplay at 15.00 [{fid}]"
-    code, seen, text = _run(tmp_path, monkeypatch, [bad])
+def test_prose_reply_is_retried_then_falls_back(tmp_path, monkeypatch):
+    _season(tmp_path)
+    prose = "## MI brief\n- They struggle at the death"
+    code, seen, text = _run_season(tmp_path, monkeypatch, [prose])
 
     assert code == 3
     assert len(seen["prompts"]) == ipl_brief.MAX_ATTEMPTS
+    assert "not a single valid JSON object" in seen["prompts"][1]
     assert "opposition brief (fact sheet)" in text
     assert "model brief rejected after 3 attempts" in text
     assert "Last rejected model draft" in text

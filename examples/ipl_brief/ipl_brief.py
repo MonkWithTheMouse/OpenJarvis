@@ -5,11 +5,14 @@ Pipeline:
   1. ``cricket_brief`` computes every number in Python (no model involved).
   2. ``cricket_facts`` turns them into numbered facts with a verdict
      (STRENGTH / WEAKNESS / NEUTRAL) decided in Python.
-  3. A local model (Ollama) rewrites chosen facts as a brief, citing [F#].
-  4. A claim checker rejects any bullet whose numbers are not in the fact it
-     cites, or whose wording contradicts the fact's verdict. The model gets
-     the errors and retries; if it still fails, the brief falls back to the
-     plain fact sheet. You never get a wrong brief, at worst a plain one.
+  3. A local model (Ollama) returns a JSON plan: which fact IDs go in each
+     section, plus a short tactical note for each. Notes may not contain
+     numbers, stat/comparison words, or names not on the sheet.
+  4. Python validates the plan (attack = WEAKNESS facts, watch = STRENGTH
+     facts, no low-sample facts) and writes the brief itself, printing every
+     figure from the fact text. The claim checker runs on the result as a
+     backstop. Failures go back to the model (max 3 attempts); after that the
+     brief falls back to the plain fact sheet. At worst plain, never wrong.
 
 Usage:
     python examples/ipl_brief/ipl_brief.py --team "Mumbai Indians"
@@ -35,39 +38,40 @@ from pathlib import Path
 DEFAULT_MODEL = "qwen3.5:9b"
 MAX_ATTEMPTS = 3
 
-BRIEF_PROMPT = """You are a T20 performance analyst for an IPL franchise.
-Write a short opposition brief on {team} for our coaches, using ONLY the
-FACTS below.
+PLAN_PROMPT = """You are a T20 performance analyst for an IPL franchise,
+planning against {team}. Below is a numbered FACTS sheet. Python will print
+every number and name from the facts you choose; your job is only to choose
+facts and add one short tactical note to each.
 
-Hard rules:
-1. Every bullet ends with the fact ID(s) it uses, e.g. [F7] or [F2, F9].
-2. Only quote numbers that appear in the fact you cite. Do not compute,
-   combine or move numbers between players, phases or columns.
-3. Respect each fact's verdict. A STRENGTH fact is a threat to us; never call
-   it weak, slow, poor or a struggle. A WEAKNESS fact is an opportunity.
-   NEUTRAL facts are context only.
-4. Prefer facts listed under "Biggest relative weaknesses/strengths".
-   If a fact is marked low sample, say it is a weak signal.
-5. No outside knowledge (form, injuries, auctions, venues).
+Reply with ONE JSON object and nothing else:
+{{
+  "bottom_line": {{"fact": "F?", "note": "one tactical sentence"}},
+  "attack":  [{{"fact": "F?", "note": "how we exploit it"}}],
+  "watch":   [{{"fact": "F?", "note": "how we handle it"}}],
+  "players": [{{"fact": "F?", "note": "one-line plan for this player"}}]
+}}
 
-Format (markdown, under 300 words; these headings are checked):
-**Bottom line:** one sentence, ending with its fact ID.
-### Where to attack them
-2-3 bullets from WEAKNESS facts.
-### What to watch out for
-2-3 bullets from STRENGTH facts.
-### Key players
-2-3 bullets.
+Rules (each is checked; breaking one means a retry):
+- bottom_line: the single best WEAKNESS fact (not low sample).
+- attack: 2-3 WEAKNESS facts. watch: 2-3 STRENGTH facts. players: 0-3 facts.
+  Prefer the IDs listed under "Biggest relative weaknesses/strengths".
+- Never use a low-sample fact in bottom_line, attack or watch.
+- Notes are tactics only (field placings, lengths, match-ups, who bowls when),
+  at most 25 words, with NO numbers and NO stat or comparison words
+  (better, worse, higher, lower, league, average, economy, strike rate,
+  runs, balls, wickets, strength, weak).
+- In "watch" notes, describe how we contain them (e.g. "keep the boundary
+  riders back"); avoid words like target, exploit, weak, struggle.
+- Write player names exactly as on the sheet (e.g. "SA Yadav", not a full
+  or different name). Mention no one who is not on the sheet.
 
 {facts}
 """
 
-RETRY_PROMPT = """Your brief failed the fact check. Problems:
+RETRY_PROMPT = """Your plan was rejected. Problems:
 {problems}
 
-Rewrite the whole brief, fixing every problem. Same rules and format as
-before: cite [F#] on every bullet, quote only numbers from the cited fact,
-respect each verdict.
+Reply again with ONE corrected JSON object only, following every rule.
 
 {facts}
 """
@@ -75,12 +79,6 @@ respect each verdict.
 
 def strip_thinking(text: str) -> str:
     return re.sub(r"<think>.*?</think>", "", text, flags=re.S).strip()
-
-
-def with_title(brief: str, team: str) -> str:
-    """Python owns the title: drop any model-written H1/H2, add ours."""
-    body = [ln for ln in brief.splitlines() if not re.match(r"^#{1,2}\s", ln)]
-    return f"## {team}: opposition brief\n\n" + "\n".join(body).strip()
 
 
 def main() -> int:
@@ -104,7 +102,10 @@ def main() -> int:
     from openjarvis.tools.cricket_facts import (
         build_facts,
         fallback_brief,
+        parse_plan,
         render_fact_sheet,
+        render_plan,
+        validate_plan,
         verify_brief,
     )
 
@@ -150,23 +151,27 @@ def main() -> int:
         )
         return 1
 
-    brief, problems, attempts = "", [], 0
+    brief, problems, attempts, draft = "", [], 0, ""
     history: list[tuple[int, list[str]]] = []
-    prompt = BRIEF_PROMPT.format(team=team, facts=sheet)
+    prompt = PLAN_PROMPT.format(team=team, facts=sheet)
     try:
         for attempts in range(1, MAX_ATTEMPTS + 1):
             print(
-                f"Writing brief for {team} with {args.model} "
+                f"Planning brief for {team} with {args.model} "
                 f"(attempt {attempts}/{MAX_ATTEMPTS})...",
                 file=sys.stderr,
             )
             draft = strip_thinking(j.ask(prompt, context=False, temperature=0.2))
-            brief = with_title(draft, team)
-            problems = verify_brief(brief, facts, require_structure=True)
+            plan = parse_plan(draft)
+            problems = validate_plan(plan, facts)
+            if not problems:
+                brief = render_plan(team, plan, facts)
+                # Backstop: the rendered brief must pass the claim checker too.
+                problems = verify_brief(brief, facts, require_structure=True)
             if not problems:
                 break
             history.append((attempts, problems))
-            print(f"  fact check failed: {len(problems)} problem(s)", file=sys.stderr)
+            print(f"  check failed: {len(problems)} problem(s)", file=sys.stderr)
             for p in problems:
                 print(f"    - {p}", file=sys.stderr)
             prompt = RETRY_PROMPT.format(
@@ -176,7 +181,7 @@ def main() -> int:
         j.close()
 
     fell_back = bool(problems)
-    rejected = brief
+    rejected = draft
     if fell_back:
         brief = fallback_brief(team, facts)
 
@@ -194,8 +199,9 @@ def main() -> int:
         )
     else:
         footer.append(
-            f"\n**Fact check: passed** (attempt {attempts}). Every bullet's "
-            "numbers and direction match the fact it cites."
+            f"\n**Fact check: passed** (attempt {attempts}). The model chose "
+            "facts and wrote the tactical notes; every number, name and "
+            "direction is printed from the cited fact."
         )
     footer += ["", "<details><summary>Fact sheet</summary>", "", sheet, "</details>"]
     if history:
