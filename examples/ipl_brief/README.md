@@ -20,7 +20,7 @@ catches it if it makes a figure up (exit code 2).
 # 1. Code (your fork) + Python deps
 git clone https://github.com/MonkWithTheMouse/OpenJarvis.git && cd OpenJarvis
 git checkout <this branch>
-uv sync                      # install uv first if needed: brew install uv
+uv sync --extra dev          # dev extra includes pytest; install uv first: brew install uv
 
 # 2. Local model engine
 brew install ollama          # or download from https://ollama.com
