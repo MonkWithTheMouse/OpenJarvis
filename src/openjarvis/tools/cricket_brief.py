@@ -1,7 +1,7 @@
 """Cricket opposition brief tool — offline T20 stats from Cricsheet CSV data.
 
-Reads Cricsheet's ball-by-ball "Ashwin" CSV format (``csv2``) from a local
-folder and computes a deterministic scouting summary for one team:
+Reads Cricsheet ball-by-ball data (JSON match files, or the "Ashwin" CSV
+format) from a local folder and computes a deterministic scouting summary for one team:
 
 * batting and bowling by phase (powerplay 1-6, middle 7-15, death 16-20),
   compared against the league average in the same data slice
@@ -10,7 +10,7 @@ folder and computes a deterministic scouting summary for one team:
 * auto-flagged weaknesses, with low-sample warnings
 
 All numbers are computed in Python, never by the model, so the brief the agent
-writes rests on figures that can be checked. The tool only reads ``.csv``
+writes rests on figures that can be checked. The tool only reads ``.csv``/``.json``
 files inside its data directory (default ``~/.openjarvis/data/cricket``) and
 makes no network calls.
 """
@@ -18,6 +18,7 @@ makes no network calls.
 from __future__ import annotations
 
 import csv
+import json
 import os
 from collections import Counter
 from dataclasses import dataclass, field
@@ -230,6 +231,50 @@ def _rows_to_deliveries(rows: Iterable[Dict[str, str]]) -> List[Delivery]:
     return out
 
 
+def _json_match_rows(path: Path) -> List[Dict[str, str]]:
+    """Flatten one Cricsheet JSON match into csv2-style row dicts."""
+    try:
+        match = json.loads(path.read_text(encoding="utf-8"))
+        info = match["info"]
+        innings_list = match["innings"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return []  # not a Cricsheet match file (e.g. README export)
+    teams = info.get("teams") or []
+    rows: List[Dict[str, str]] = []
+    for index, inn in enumerate(innings_list, start=1):
+        if not isinstance(inn, dict):
+            continue
+        # Super overs are flagged; give them innings > 2 so they are skipped.
+        number = index + 2 if inn.get("super_over") else index
+        bat = inn.get("team", "")
+        bowl = next((t for t in teams if t != bat), "")
+        for over in inn.get("overs") or []:
+            over_no = over.get("over", 0)
+            for ball_no, d in enumerate(over.get("deliveries") or [], start=1):
+                runs = d.get("runs") or {}
+                extras = d.get("extras") or {}
+                wickets = d.get("wickets") or [{}]
+                rows.append(
+                    {
+                        "match_id": path.stem,
+                        "season": str(info.get("season", "")),
+                        "innings": str(number),
+                        "ball": f"{over_no}.{ball_no}",
+                        "batting_team": bat,
+                        "bowling_team": bowl,
+                        "striker": d.get("batter") or d.get("batsman", ""),
+                        "bowler": d.get("bowler", ""),
+                        "runs_off_bat": str(runs.get("batter", runs.get("batsman", 0))),
+                        "extras": str(runs.get("extras", 0)),
+                        "wides": str(extras.get("wides", "")),
+                        "noballs": str(extras.get("noballs", "")),
+                        "wicket_type": wickets[0].get("kind", ""),
+                        "player_dismissed": wickets[0].get("player_out", ""),
+                    }
+                )
+    return rows
+
+
 def _csv_files(data_dir: Path) -> List[Path]:
     # Prefer the combined file if present; otherwise read per-match files.
     combined = data_dir / "all_matches.csv"
@@ -242,21 +287,30 @@ def _csv_files(data_dir: Path) -> List[Path]:
     )
 
 
+def _json_files(data_dir: Path) -> List[Path]:
+    return sorted(p for p in data_dir.rglob("*.json") if p.is_file())
+
+
 _CACHE: Dict[Tuple[str, Tuple[Tuple[str, float], ...]], List[Delivery]] = {}
 
 
 def load_deliveries(data_dir: Path) -> List[Delivery]:
-    files = _csv_files(data_dir)
+    files = _csv_files(data_dir) if data_dir.is_dir() else []
+    if not files and data_dir.is_dir():
+        files = _json_files(data_dir)
     if not files:
         raise FileNotFoundError(
-            f"No Cricsheet CSV files found in {data_dir}. Download the IPL "
-            "'CSV (Ashwin)' zip from cricsheet.org and unzip it there."
+            f"No Cricsheet match files found in {data_dir}. Download the IPL "
+            "JSON (or CSV) zip from cricsheet.org and unzip it there."
         )
     key = (str(data_dir), tuple((str(p), p.stat().st_mtime) for p in files))
     if key in _CACHE:
         return _CACHE[key]
     deliveries: List[Delivery] = []
     for path in files:
+        if path.suffix == ".json":
+            deliveries.extend(_rows_to_deliveries(_json_match_rows(path)))
+            continue
         with path.open(newline="", encoding="utf-8") as fh:
             reader = csv.DictReader(fh)
             missing = _REQUIRED_COLUMNS - set(reader.fieldnames or [])
@@ -266,8 +320,9 @@ def load_deliveries(data_dir: Path) -> List[Delivery]:
             deliveries.extend(_rows_to_deliveries(reader))
     if not deliveries:
         raise ValueError(
-            f"CSV files in {data_dir} are not in Cricsheet's ball-by-ball "
-            f"'Ashwin' format (need columns: {', '.join(sorted(_REQUIRED_COLUMNS))})."
+            f"Files in {data_dir} are not Cricsheet ball-by-ball data: need "
+            "Cricsheet JSON match files or 'Ashwin' CSV "
+            f"(columns: {', '.join(sorted(_REQUIRED_COLUMNS))})."
         )
     _CACHE.clear()
     _CACHE[key] = deliveries

@@ -325,3 +325,116 @@ def test_agent_resolver_instantiates_cricket_brief(agent_type):
         assert resolved.openai_specs[0]["function"]["name"] == "cricket_brief"
     finally:
         resolved.close()
+
+
+# ---------------------------------------------------------------------------
+# Cricsheet JSON format (same match as the CSV fixture's match 1)
+# ---------------------------------------------------------------------------
+
+
+def _d(batter, bowler, bat=0, extras=0, *, kind=None, wicket=None, out=None):
+    d = {
+        "batter": batter,
+        "bowler": bowler,
+        "non_striker": "X",
+        "runs": {"batter": bat, "extras": extras, "total": bat + extras},
+    }
+    if kind:
+        d["extras"] = {kind: extras}
+    if wicket:
+        d["wickets"] = [{"player_out": out, "kind": wicket}]
+    return d
+
+
+def _json_match():
+    return {
+        "meta": {"data_version": "1.1.0"},
+        "info": {"season": "2023", "teams": [MI, CSK]},
+        "innings": [
+            {
+                "team": MI,
+                "overs": [
+                    {
+                        "over": 0,
+                        "deliveries": [
+                            _d("Rohit", "Deepak", 4),
+                            _d("Rohit", "Deepak", 0, 1, kind="wides"),
+                            _d("Rohit", "Deepak", wicket="caught", out="Rohit"),
+                        ],
+                    },
+                    {"over": 8, "deliveries": [_d("SKY", "Jadeja", 2)]},
+                    {
+                        "over": 16,
+                        "deliveries": [
+                            _d("Hardik", "Pathirana", 6),
+                            _d("Hardik", "Pathirana", 0, 1, kind="legbyes"),
+                            _d("Hardik", "Pathirana", wicket="run out", out="Hardik"),
+                        ],
+                    },
+                ],
+            },
+            {
+                "team": CSK,
+                "overs": [
+                    {"over": 0, "deliveries": [_d("Gaikwad", "Bumrah", 1)]},
+                    {
+                        "over": 17,
+                        "deliveries": [
+                            _d("Dhoni", "Bumrah", wicket="bowled", out="Dhoni"),
+                            _d("Jadeja", "Bumrah", 4, 1, kind="noballs"),
+                        ],
+                    },
+                ],
+            },
+            {
+                "team": MI,
+                "super_over": True,
+                "overs": [{"over": 0, "deliveries": [_d("Rohit", "Deepak", 6)]}],
+            },
+        ],
+    }
+
+
+@pytest.fixture
+def json_dir(tmp_path: Path) -> Path:
+    import json
+
+    tmp_path = tmp_path / "json"  # separate from the CSV fixture's folder
+    tmp_path.mkdir()
+    (tmp_path / "1359475.json").write_text(json.dumps(_json_match()))
+    (tmp_path / "README.txt").write_text("not data")
+    (tmp_path / "notes.json").write_text('{"hello": "world"}')
+    return tmp_path
+
+
+def test_json_matches_csv_numbers(json_dir, data_dir):
+    from_json = cb.analyse(_deliveries(json_dir), MI)
+    from_csv = cb.analyse(_deliveries(data_dir), MI, from_season=2023)
+    for phase in cb.PHASES:
+        for side in ("batting", "bowling"):
+            j = getattr(from_json, side)[phase]
+            c = getattr(from_csv, side)[phase]
+            assert (j.runs, j.balls, j.wickets) == (c.runs, c.balls, c.wickets)
+    assert len(_deliveries(json_dir)) == 10  # super over skipped
+
+
+def test_json_season_and_dismissals(json_dir):
+    rows = _deliveries(json_dir)
+    assert {d.season_year for d in rows} == {2023}
+    report = cb.analyse(rows, MI)
+    lines = {b.name: b for b in report.batters}
+    assert lines["Rohit"].dismissals["caught"] == 1
+    assert (lines["Rohit"].total.runs, lines["Rohit"].total.balls) == (4, 2)
+
+
+def test_csv_preferred_over_json(json_dir):
+    rows = _fixture_rows()
+    _write(json_dir / "all_matches.csv", rows)
+    assert len(_deliveries(json_dir)) == 11  # the CSV fixture, not the JSON
+
+
+def test_json_only_junk_is_rejected(tmp_path):
+    (tmp_path / "notes.json").write_text('{"hello": "world"}')
+    cb._CACHE.clear()
+    with pytest.raises(ValueError, match="Cricsheet"):
+        cb.load_deliveries(tmp_path)

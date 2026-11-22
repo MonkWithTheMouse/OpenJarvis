@@ -1,6 +1,6 @@
 # IPL Opposition Brief (fully offline)
 
-Turns free Cricsheet ball-by-ball data into a one-page scouting brief on any
+Turns free Cricsheet ball-by-ball data (JSON or CSV) into a one-page scouting brief on any
 IPL team. Everything runs on your machine: no API keys, no cloud, no login.
 
 ```
@@ -30,12 +30,13 @@ ollama pull qwen3.5:9b       # ~6 GB; on 8 GB RAM use qwen3.5:4b
 # 3. Data (free, Open Data Commons licence)
 mkdir -p ~/.openjarvis/data/cricket
 # From https://cricsheet.org/downloads/ download the Indian Premier League
-# zip in "CSV (Ashwin)" format, then:
-unzip ~/Downloads/ipl*_csv2.zip -d ~/.openjarvis/data/cricket
+# JSON zip (or the CSV "Ashwin" zip), then:
+unzip ~/Downloads/ipl*.zip -d ~/.openjarvis/data/cricket
 ```
 
-The tool reads `all_matches.csv` if the zip has one, otherwise every per-match
-`<id>.csv` (it skips `<id>_info.csv`). Use `--data-dir` or the
+The tool reads CSV first if present (`all_matches.csv`, or per-match
+`<id>.csv`, skipping `<id>_info.csv`), otherwise every Cricsheet JSON match
+file. Super overs are excluded. Use `--data-dir` or the
 `OPENJARVIS_CRICKET_DATA` variable to point somewhere else.
 
 ## Run
